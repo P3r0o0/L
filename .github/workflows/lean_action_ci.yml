@@ -1,0 +1,53 @@
+name: Lean Action CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Free Disk Space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - uses: actions/checkout@v5
+      - name: Configure curl for Mathlib Cache
+        run: |
+          cat << 'EOF' > "$HOME/.curlrc"
+          http1.1
+          parallel-max = 32
+          retry = 5
+          retry-all-errors
+          retry-delay = 2
+          EOF
+      - name: Fetch Mathlib Cache
+        run: |
+          if ! command -v elan >/dev/null 2>&1; then
+            curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
+          fi
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.elan/bin:$PATH"
+          export MATHLIB_CACHE_GET_URL=https://cache.mathlib.org/mathlib4
+          for attempt in 1 2 3 4; do
+            echo "Fetching Mathlib cache (attempt ${attempt}/4)..."
+            if lake exe cache get; then
+              if [ "${attempt}" -gt 1 ]; then
+                lake exe cache unpack
+              fi
+              exit 0
+            fi
+            echo "Mathlib cache download attempt ${attempt} had transient failures; retrying..."
+            sleep $((attempt * 3))
+          done
+          exit 1
+      - uses: leanprover/lean-action@v1
+        with:
+          use-github-cache: false
+      - name: Run Rust Tests
+        working-directory: crates
+        run: |
+          cargo check --no-default-features
+          cargo test
+
